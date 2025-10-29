@@ -1047,12 +1047,6 @@ template <int DATA_PIN, fl::u8 CLOCK_PIN, EOrder RGB_ORDER = GRB, uint32_t SPI_S
 class HD108Controller : public CPixelLEDController<RGB_ORDER> {
 	typedef fl::SPIOutput<DATA_PIN, CLOCK_PIN, SPI_SPEED> SPI;
 	SPI mSPI;
-private:
-	// 8-bit -> 16-bit with fast gamma ≈ 2.0 (no floats, full 0..~65025 range)
-	FASTLED_FORCE_INLINE fl::u16 _u8_to_u16_gamma(fl::u8 v) {
-		// v*v gives ~gamma 2.0; close to 65535 max (65025), visually better esp. for blue
-		return (fl::u16)v * (fl::u16)v;
-	}
 
 public:
 	HD108Controller() {}
@@ -1067,21 +1061,25 @@ void showPixels(PixelController<RGB_ORDER> &pixels) override {
 	mSPI.waitFully();
 	mSPI.release();
 
-	// Use a uniform 5-bit brightness in the 15-bit header fields
-	const fl::u8 bri5 = 0x1F;	// full (0..31). Change if you want a lower ceiling.
-	const fl::u8 rg = bri5;
-	const fl::u8 gg = bri5;
-	const fl::u8 bg = bri5;
-
-	// Two header bytes (layout exactly as in your working code)
-	const fl::u8 f0 = (fl::u8)(0x80 | ((rg & 0x1F) << 2) | ((gg >> 3) & 0x03));
-	const fl::u8 f1 = (fl::u8)(((gg & 0x07) << 5) | (bg & 0x1F));
-
 	while (pixels.has(1)) {
 		fl::u8 r8, g8, b8;
 		pixels.loadAndScaleRGB(&r8, &g8, &b8);
 
-		// 8->16 with fast gamma (≈2.0)
+		// Derive a 5-bit gain from the pixel's max channel (0..255 -> 0..31)
+		fl::u8 max8 = r8;
+		if (g8 > max8) max8 = g8;
+		if (b8 > max8) max8 = b8;
+		fl::u8 bri5 = (fl::u8)((max8 * 31 + 127) / 255);
+		if (bri5 == 0 && max8 > 0) bri5 = 1;
+
+		// Two header bytes
+		const fl::u8 rg = bri5;
+		const fl::u8 gg = bri5;
+		const fl::u8 bg = bri5;
+		const fl::u8 f0 = (fl::u8)(0x80 | ((rg & 0x1F) << 2) | ((gg >> 3) & 0x03));
+		const fl::u8 f1 = (fl::u8)(((gg & 0x07) << 5) | (bg & 0x1F));
+
+		// 8->16 with gamma
 		fl::u16 r = _u8_to_u16_gamma(r8);
 		fl::u16 g = _u8_to_u16_gamma(g8);
 		fl::u16 b = _u8_to_u16_gamma(b8);
@@ -1106,6 +1104,13 @@ void showPixels(PixelController<RGB_ORDER> &pixels) override {
 	mSPI.waitFully();
 	mSPI.release();
 }
+
+private:
+	// 8-bit -> 16-bit with fast gamma ≈ 2.0
+	static FASTLED_FORCE_INLINE fl::u16 _u8_to_u16_gamma(fl::u8 v) {
+		// v*v gives ~gamma 2.0; close to 65535 max (65025), visually better esp. for blue
+		return (fl::u16)v * (fl::u16)v;
+	}
 };
 
 /// @} ClockedChipsets
