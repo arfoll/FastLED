@@ -1032,6 +1032,75 @@ protected:
 
 };
 
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//
+// HD108 16-bit SPI chipset // should use SPI MODE3???
+//
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// HD108 Controller class
+/// @tparam DATA_PIN the data pin for these LEDs
+/// @tparam CLOCK_PIN the clock pin for these LEDs
+/// @tparam RGB_ORDER the RGB ordering for these LEDs
+/// @tparam SPI_SPEED the clock divider used for these LEDs
+template <int DATA_PIN, fl::u8 CLOCK_PIN, EOrder RGB_ORDER = GRB, uint32_t SPI_SPEED = DATA_RATE_MHZ(20)>
+class HD108Controller : public CPixelLEDController<RGB_ORDER> {
+	typedef fl::SPIOutput<DATA_PIN, CLOCK_PIN, SPI_SPEED> SPI;
+	SPI mSPI;
+
+public:
+	HD108Controller() {}
+
+	void init() override { mSPI.init(); }
+
+protected:
+	void showPixels(PixelController<RGB_ORDER> &pixels) override {
+		// ---- Start frame: 64 bits of 0 ----
+		mSPI.select();
+		for (int i = 0; i < 8; i++) mSPI.writeByte(0x00);
+		mSPI.waitFully();
+		mSPI.release();
+
+		while (pixels.has(1)) {
+			uint8_t r8, g8, b8;
+			pixels.loadAndScaleRGB(&r8, &g8, &b8);
+
+			// Map 8-bit -> 16-bit
+			uint16_t r = ((uint16_t)r8) << 8;
+			uint16_t g = ((uint16_t)g8) << 8;
+			uint16_t b = ((uint16_t)b8) << 8;
+
+			// auto-gain to avoid total-black bug on zeros
+			uint8_t rg = (r8 > 0) ? 0x1F : 1;
+			uint8_t gg = (g8 > 0) ? 0x1F : 1;
+			uint8_t bg = (b8 > 0) ? 0x1F : 1;
+
+			// Two header bytes
+			uint8_t f0 = 0x80 | ((rg & 0x1F) << 2) | ((gg >> 3) & 0x03);
+			uint8_t f1 = ((gg & 0x07) << 5) | (bg & 0x1F);
+
+			mSPI.select();
+			mSPI.writeByte(f0);
+			mSPI.writeByte(f1);
+			mSPI.writeByte(r >> 8); mSPI.writeByte(r & 0xFF);
+			mSPI.writeByte(g >> 8); mSPI.writeByte(g & 0xFF);
+			mSPI.writeByte(b >> 8); mSPI.writeByte(b & 0xFF);
+			mSPI.waitFully();
+			mSPI.release();
+
+			pixels.stepDithering();
+			pixels.advanceData();
+		}
+
+		// ---- End frame ----
+		int latch = pixels.size() / 2 + 4;
+		mSPI.select();
+		for (int i = 0; i < latch; i++) mSPI.writeByte(0xFF);
+		mSPI.waitFully();
+		mSPI.release();
+	}
+};
+
 /// @} ClockedChipsets
 
 
